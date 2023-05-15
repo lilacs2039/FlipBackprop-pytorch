@@ -39,7 +39,7 @@ Figure. Example of updating by flipping bits
 
 Figure . Example of updating continuous values in the gradient direction
 
-![image-20230511222917737](01_report_flip-backprop_ja.assets/image-20230511222917737.png)
+![image-20230515152813800](01_report_flip-backprop.assets/image-20230515152813800.png)
 
 - Therefore, it may be possible to complete the training in fewer steps than FP32 weights.
 

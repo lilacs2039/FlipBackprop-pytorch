@@ -39,7 +39,7 @@
 
 図．連続値を勾配方向に更新する例
 
-![image-20230511222917737](01_report_flip-backprop_ja.assets/image-20230511222917737.png)
+![image-20230515152813800](01_report_flip-backprop_ja.assets/image-20230515152813800.png)
 
 - そのため、FP32重みよりも少ないステップ数で学習完了できる可能性がある。
 
