@@ -21,6 +21,7 @@ TH_DEPTH1 = [0.00]
 # ----------------- Global Variables --------------------------------
 is_update = False
 # grad2flip_eps=1e-3  # grad2flipで、勾配=0を判定するしきい値
+update_permission_coef = 0  # ビット更新の許可度  0:allow all(100%), 1:50%, 2:25%, ...
 
 # ---------- debug functions --------------------------------
 def debug(*mes): print("D> ",mes)
@@ -387,7 +388,6 @@ class BinaryTensor(Module):
         self.vote_accumulator = None
         self.n_votes = 0
         self.vote_p_max = vote_p_max
-        self.half_mask = None  # update... None:100%, 1:50%, 2:25%, ...
         self.path = Path(self.__class__.__name__)
         
     def __repr__(self):
@@ -401,12 +401,13 @@ class BinaryTensor(Module):
         logger.log({f"{self.path.parents[1]}/{self.path.stem}-vote_accumulator": wandb.Histogram(self.vote_accumulator.cpu().numpy())})
         update_mask = vote2flip(self.vote_accumulator, self.n_votes, self.vote_p_max)
         # calculate suppressor_mask
-        if self.half_mask is not None:
-            times_rand = self.half_mask
-            suppressor_mask = torch.ones(update_mask.shape, dtype=torch.uint8)*255
+        global update_permission_coef
+        if update_permission_coef > 0:
+            times_rand = update_permission_coef
+            suppressor_mask = torch.ones(update_mask.shape, dtype=torch.uint8)*255  # if 1 suppress update
             for j in range(times_rand): suppressor_mask &= torch.randint(0,256, update_mask.shape, dtype=torch.uint8)
-            suppressor_mask = 255 ^ suppressor_mask  # when 2: 25% -> 75%
-            update_mask &= suppressor_mask.to(update_mask.device)
+            permission_mask = 255 ^ suppressor_mask  # if 1 allow update. when 2: 25% -> 75%
+            update_mask &= permission_mask.to(update_mask.device)
         # update weights
         self.weights.data = self.weights.to(update_mask.device)
         self.weights.data = bitwise_xnor(self.weights, update_mask)  # update weights
@@ -679,18 +680,20 @@ class Sequential(Module):
             for layer in model.layers:
                 inputs.append(h)
                 h = layer(h)
-                if model.log_bin_output and h.dtype == torch.uint8:
-                    o_dx = reduce(unpackbits(h).type(torch.float32), 'b ... -> ...', 'mean').flatten().cpu().numpy()
-                    logger.heatmap(f"{layer.path}/forward_out-mean_of_bits-heatmap", o_dx)
-                    logger.log({f"{layer.path}/forward_out-mean_of_bits": wandb.Histogram(o_dx)})
-                    if h.ndim>2:
-                        o_d = reduce(unpackbits(h).type(torch.float32), 'b d ... -> d', 'mean').flatten().cpu().numpy()
-                        logger.heatmap(f"{layer.path}/forward_out-mean_of_bits-d-heatmap", o_d)
-                        logger.log({f"{layer.path}/forward_out-mean_of_bits-d": wandb.Histogram(o_d)})
-                    if h.ndim>2:
-                        o_x = reduce(unpackbits(h).type(torch.float32), 'b d ... -> ...', 'mean').flatten().cpu().numpy()
-                        logger.heatmap(f"{layer.path}/forward_out-mean_of_bits-x-heatmap", o_x)
-                        logger.log({f"{layer.path}/forward_out-mean_of_bits-x": wandb.Histogram(o_x)})
+                if model.log_bin_output:
+                    if h.dtype == torch.uint8:
+                        o_dx = reduce(unpackbits(h).type(torch.float32), 'b ... -> ...', 'mean').flatten().cpu().numpy()
+                        logger.heatmap(f"{layer.path}/forward_out-mean_of_bits-heatmap", o_dx)
+                        logger.log({f"{layer.path}/forward_out-mean_of_bits": wandb.Histogram(o_dx)})
+                        if h.ndim>2:
+                            o_d = reduce(unpackbits(h).type(torch.float32), 'b d ... -> d', 'mean').flatten().cpu().numpy()
+                            logger.heatmap(f"{layer.path}/forward_out-mean_of_bits-d-heatmap", o_d)
+                            logger.log({f"{layer.path}/forward_out-mean_of_bits-d": wandb.Histogram(o_d)})
+                            o_x = reduce(unpackbits(h).type(torch.float32), 'b d ... -> ...', 'mean').flatten().cpu().numpy()
+                            logger.heatmap(f"{layer.path}/forward_out-mean_of_bits-x-heatmap", o_x)
+                            logger.log({f"{layer.path}/forward_out-mean_of_bits-x": wandb.Histogram(o_x)})
+                    elif h.dtype == torch.float32:
+                        logger.log({f"{layer.path}/forward_out-fp32": wandb.Histogram(h.cpu().numpy())})
             # ctx.save_for_backward(inputs)
             ctx.inputs = inputs
             ctx.model = model
