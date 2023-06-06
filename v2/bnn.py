@@ -21,7 +21,7 @@ TH_DEPTH1 = [0.00]
 # ----------------- Global Variables --------------------------------
 is_update = False
 # grad2flip_eps=1e-3  # grad2flipで、勾配=0を判定するしきい値
-update_permission_coef = 0  # ビット更新の許可度  0:allow all(100%), 1:50%, 2:25%, ...
+update_suppressor_level = 0  # ビット更新の抑制レベル  0:allow all(100%), 1:50%, 2:25%, ...
 
 # ---------- debug functions --------------------------------
 def debug(*mes): print("D> ",mes)
@@ -97,19 +97,21 @@ def calc_packed_features(features:int):
 assert calc_packed_features(8)==1
 assert calc_packed_features(9)==2
 
-def vote2flip(votes:torch.Tensor, n_votes:int, vote_p_max:float):
-    "反転投票を集計・二値化した結果のflipを返す"
+def vote2flip(votes:torch.Tensor, n_votes:int, vote_p_min:float):
+    """反転投票を集計・二値化した結果のflipを返す
+    vote_p_min:float - voteのしきい値（二項分布の平均pN）を計算するときの最小p。0.~1.を指定する。
+    """
     mean = votes.type(torch.float32).mean()
     p = mean/n_votes
-    p = max(vote_p_max, p)
+    p = max(vote_p_min, p)
     flip = packbits(votes > p*n_votes)  # flip if larger than mean (of binomial distribution with probability p)
     return flip
 
-def reduce_flip(flip:torch.Tensor, reduce_pattern:str, vote_p_max:float):
+def reduce_flip(flip:torch.Tensor, reduce_pattern:str, vote_p_min:float):
     "flipを集計・二値化してreduce処理する。"
     vote  = reduce(unpackbits(flip), reduce_pattern, 'sum').type(torch.int32)
     n_votes = count_votes(flip, vote)
-    flip_ret = vote2flip(vote, n_votes, vote_p_max=vote_p_max)
+    flip_ret = vote2flip(vote, n_votes, vote_p_min=vote_p_min)
     return flip_ret
 
 def flip2grad(bin:torch.Tensor, flip:torch.Tensor):
@@ -375,7 +377,7 @@ class PNB(Module):
 
 class BinaryTensor(Module):
     "Binary Tensor Module class"
-    def __init__(self, shape, weights=None, vote_p_max=0.02):
+    def __init__(self, shape, weights=None, vote_p_min=0.02):
         """
         Parameters
         ------------------
@@ -387,7 +389,7 @@ class BinaryTensor(Module):
             if weights is None else nn.Parameter(torch.tensor(weights, dtype=torch.uint8), requires_grad=False)
         self.vote_accumulator = None
         self.n_votes = 0
-        self.vote_p_max = vote_p_max
+        self.vote_p_min = vote_p_min
         self.path = Path(self.__class__.__name__)
         
     def __repr__(self):
@@ -399,11 +401,11 @@ class BinaryTensor(Module):
         if not self.has_accumulator(): return
         # calculate update mask
         logger.log({f"{self.path.parents[1]}/{self.path.stem}-vote_accumulator": wandb.Histogram(self.vote_accumulator.cpu().numpy())})
-        update_mask = vote2flip(self.vote_accumulator, self.n_votes, self.vote_p_max)
+        update_mask = vote2flip(self.vote_accumulator, self.n_votes, self.vote_p_min)
         # calculate suppressor_mask
-        global update_permission_coef
-        if update_permission_coef > 0:
-            times_rand = update_permission_coef
+        global update_suppressor_level
+        if update_suppressor_level > 0:
+            times_rand = update_suppressor_level
             suppressor_mask = torch.ones(update_mask.shape, dtype=torch.uint8)*255  # if 1 suppress update
             for j in range(times_rand): suppressor_mask &= torch.randint(0,256, update_mask.shape, dtype=torch.uint8)
             permission_mask = 255 ^ suppressor_mask  # if 1 allow update. when 2: 25% -> 75%
@@ -497,7 +499,7 @@ class XnorWeight(Module):
             h_new = self._forward(x)
             h_flipped = bitwise_xor(h_old, h_new)
             w_flip = bitwise_xor(h_flip, h_flipped)
-            w_flip = reduce_flip(h_flip, 'b d o i -> d o i', vote_p_max=0.5)
+            w_flip = reduce_flip(h_flip, 'b d o i -> d o i', vote_p_min=0.5)
             # Update weights
             self.weights.backward(w_flip)
             self.weights.update()
@@ -527,7 +529,7 @@ class XnorWeight(Module):
         assert o==self.out_features,f'output out axis not match. actual:{o}, expected:{self.out_features}'
         assert i==calc_packed_features(self.in_features),f'output in axis not match. actual:{i}, expected:{calc_packed_features(self.in_features)}'
         # Update weights
-        x_flip = reduce_flip(h_flip, 'b d o i -> b d i', vote_p_max=0.5)
+        x_flip = reduce_flip(h_flip, 'b d o i -> b d i', vote_p_min=0.5)
         # Validate
         b,d,i = x_flip.shape
         assert i==calc_packed_features(self.in_features),f'output in axis not match. actual:{i}, expected:{calc_packed_features(self.in_features)}'
