@@ -2,6 +2,11 @@
 
 # ～　ニューラルネットワーク学習法の全面的見直し　～
 
+変更履歴
+
+- 「図．BMAレイヤのまとめ」のXNOR Backward計算手順を修正。（2023年6月7日）
+- grad2flip, flip2gradについて加筆・修正。（2023年6月7日）
+
 
 
 # サマリー
@@ -28,18 +33,18 @@
 
 - 値の更新は、反転（flip）、つまり「反転する（１） or しない（０）」の１ビットで表現する。
 
-図．ビットを反転して更新する例
+**図．ビットを反転して更新する例**
 
-![image-20230511222334424](01_report_flip-backprop_ja.assets/image-20230511222334424.png)
+![image-20230511222334424](01ja_report_flip-backprop_ja.assets/image-20230511222334424.png)
 
 - それぞれの重みを二値だけで表現するので、更新指示が正確ならば１ステップで最適値に収束する。
   - 実際の学習では、前レイヤの学習が進むことで適切な更新指示が変わるので、１ステップで学習が終わるということではない。
 
 - 反対に、連続値の勾配更新は複数回の更新を経て最適値に収束する。
 
-図．連続値を勾配方向に更新する例
+**図．連続値を勾配方向に更新する例**
 
-![image-20230515152813800](01_report_flip-backprop_ja.assets/image-20230515152813800.png)
+![image-20230515152813800](01ja_report_flip-backprop_ja.assets/image-20230515152813800.png)
 
 - そのため、FP32重みよりも少ないステップ数で学習完了できる可能性がある。
 
@@ -50,23 +55,77 @@
 - バイナリ重みは離散値であり既存の勾配による更新は不可能であるため、バイナリ値を更新する方法を再考する必要がある。
 - バイナリ値は２値のみなので、更新信号は値が反転するかどうか（flip）だけを伝える。
 
+**図. 「FP32重みの勾配」と「バイナリ重みの反転」の対応**
+
+![Threshold  "eight  F p 32  Binary  gradient  The gradient is  subtracted trom the  weights ](01ja_report_flip-backprop_ja.assets/clip_image001.png)
+
+- FP32重みをしきい値で二値化してバイナリ重みを得るとき、勾配(grad)・反転(flip)は以下のようにして相互変換できる。
 
 
-図. 「FP32重みの勾配」と「バイナリ重みの反転」の対応
 
-![Threshold  "eight  F p 32  Binary  gradient  The gradient is  subtracted trom the  weights ](01_report_flip-backprop_ja.assets/clip_image001.png)
+## grad2flip
 
-- FP32重みをしきい値で二値化し、バイナリ重みを得るとき、勾配(grad)・反転(flip)の変換はそれぞれ以下のようになる。
-    - grad to flip
-      - FP32重みがしきい値を超える方向に勾配更新するとき、対応するバイナリ重みも反転する方向への更新となるので、flipは1となる。
-      - FP32重みがしきい値と反対方向に勾配更新するとき、flipは0となる。
-    - flip to grad 
-      - 「flip」と「gradを計算したいFP32重みとしきい値の大小」から、以下のようにgradへの寄与を計算する。
-        - flipが0のとき : 0
-        - flipが1　かつ　FP32重みがしきい値より大きいとき : 1
-        - flipが1　かつ　FP32重みがしきい値より小さいとき : -1
-      - 寄与を合計してgradを求める。
-- 以上の方法で、勾配と反転が相互に変換できる。
+grad2flipは、主にpopcount演算の逆伝播のときに行う。
+
+**図．popcountのForward/Backward変換**
+
+![image-20230607173057792](01ja_report_flip-backprop_ja.assets/image-20230607173057792.png)
+
+### 考え方
+
+（通常の）連続値の勾配降下法では、errorが小さくなる方向に重みを更新する。
+
+**図．勾配降下法における重み更新の例**
+
+![image-20230607172140800](01ja_report_flip-backprop_ja.assets/image-20230607172140800.png)
+
+
+
+反転逆伝播法における、バイナリ入力の更新も同様の方向に更新する。
+
+- grad>0のとき：バイナリ値を小さくする、つまりbitを0にする
+  - 入力xが0　→　反転しない　…　A1
+  - 入力xが1　→　反転する　　…　A2
+- grad<0のとき：バイナリ値を大きくする、つまりbitを1にする
+  - 入力xが0　→　反転する　　…　B1
+  - 入力xが1　→　反転しない　…　B2
+- grad=0のとき：バイナリ値はそのまま　…　C
+
+**図．反転逆伝播法におけるバイナリ重み更新の例**
+
+![image-20230607172224076](01ja_report_flip-backprop_ja.assets/image-20230607172224076.png)
+
+各ケースを一覧表にまとめると、下表のようになる。
+
+**表．勾配と入力xに対する、flipの求め方**
+
+![image-20230607172626518](01ja_report_flip-backprop_ja.assets/image-20230607172626518.png)
+
+### 計算方法
+
+前表は、下表のようにXOR・AND演算で表現できる。
+
+**表．ビット演算による、勾配と入力xからflipを求めるときの真理値表**
+
+![image-20230607172644685](01ja_report_flip-backprop_ja.assets/image-20230607172644685.png)
+
+
+
+## flip2grad
+
+flip2gradは、主にbinarize演算の逆伝播のときに行う。
+
+**図．binarizeのForward/Backward変換**
+
+![image-20230607173254719](01ja_report_flip-backprop_ja.assets/image-20230607173254719.png)
+
+### 計算方法
+
+- 「flip」と「gradを計算したいFP32重みとしきい値の大小関係」から、以下のようにgradへの寄与を計算する。
+  - flipが0のとき : 0
+  - flipが1　かつ　FP32重みがしきい値より大きいとき : 1
+  - flipが1　かつ　FP32重みがしきい値より小さいとき : -1
+- 寄与を合計してgradを求める。
 
 
 
@@ -90,9 +149,9 @@
 
 
 
-図．勾配と反転を相互変換しながら逆伝播する様子
+**図．勾配と反転を相互変換しながら逆伝播する様子**
 
-![image-20230512231650025](01_report_flip-backprop_ja.assets/image-20230512231650025.png)
+![image-20230512231650025](01ja_report_flip-backprop_ja.assets/image-20230512231650025.png)
 
 
 
@@ -134,8 +193,8 @@
 
 
 
-図．逆伝播の経路の例
-![X : bina  XNOR  poocou t  O: FP32  W : binary  Backward ](01_report_flip-backprop_ja.assets/clip_image001-1683902020295-2.png)
+**図．逆伝播の経路の例**
+![X : bina  XNOR  poocou t  O: FP32  W : binary  Backward ](01ja_report_flip-backprop_ja.assets/clip_image001-1683902020295-2.png)
 
 
 
@@ -153,9 +212,9 @@
 
 - 課題：ミニバッチ学習の後期に、accuracyが振動する現象が見られた。
 
-図．学習の後期にaccuracyが振動
+**図．学習の後期にaccuracyが振動**
 
-![image-20230512233304848](01_report_flip-backprop_ja.assets/image-20230512233304848.png)
+![image-20230512233304848](01ja_report_flip-backprop_ja.assets/image-20230512233304848.png)
 
 
 
@@ -196,9 +255,9 @@
 
 
 
-図．Binarizeレイヤのまとめ：Tensor形状とForward/Backward計算方法
+**図．Binarizeレイヤのまとめ：Tensor形状とForward/Backward計算方法**
 
-![image-20230513235716781](01_report_flip-backprop_ja.assets/image-20230513235716781.png)
+![image-20230513235716781](01ja_report_flip-backprop_ja.assets/image-20230513235716781.png)
 
 
 
@@ -216,9 +275,9 @@
 
 
 
-図．BMAレイヤのまとめ：Tensor形状とForward/Backward計算方法
+**図．BMAレイヤのまとめ：Tensor形状とForward/Backward計算方法**
 
-![image-20230513235702350](01_report_flip-backprop_ja.assets/image-20230513235702350.png)
+![image-20230607102431671](01ja_report_flip-backprop_ja.assets/image-20230607102431671.png)
 
 
 
@@ -261,21 +320,16 @@
 
 
 
-図．torchvizで可視化したモデルのグラフ。バイナリ処理は、赤枠で示したノード内で完結する。
+**図．torchvizで可視化したモデルのグラフ。バイナリ処理は、赤枠で示したノード内で完結する。**
 
-![image-20230513161429225](01_report_flip-backprop_ja.assets/image-20230513161429225.png)
+![image-20230513161429225](01ja_report_flip-backprop_ja.assets/image-20230513161429225.png)
 
 
 
 - 学習設定
-
   - 学習率は、1 Cycle Ruleによって学習の進行に合わせて動的に変更した
     - 注）学習率はFP32レイヤだけに有効で、バイナリレイヤの学習には反映されない
-
-
     - バッチサイズを変えて２回の学習を行った。
-
-
     - 設定値
       - １回目：学習率 1e-2, バッチサイズ64, 500epoch
       - ２回目：学習率 1e-2, バッチサイズ（全学習データ）, 100epoch
@@ -299,9 +353,9 @@
 
 ## 学習の収束性
 
-図．accuracy, lossの学習結果
+**図．accuracy, lossの学習結果**
 
-![image-20230513183346050](01_report_flip-backprop_ja.assets/image-20230513183346050.png)
+![image-20230513183346050](01ja_report_flip-backprop_ja.assets/image-20230513183346050.png)
 
 - 結果：accuracy, train_loss, valid_lossが収束する
 - 考察：学習が収束する時に典型的な振る舞いである。
@@ -311,9 +365,9 @@
 
 ## バイナリレイヤ（第二層）の学習
 
-図．バイナリレイヤの学習結果
+**図．バイナリレイヤの学習結果**
 
-![image-20230513183731049](01_report_flip-backprop_ja.assets/image-20230513183731049.png)
+![image-20230513183731049](01ja_report_flip-backprop_ja.assets/image-20230513183731049.png)
 
 - 結果
   - w_flip_ratio : 小さくなっていく
@@ -330,9 +384,9 @@
 
 ## flip to grad
 
-図．学習時の反転・勾配の分布
+**図．学習時の反転・勾配の分布**
 
-![image-20230513183909809](01_report_flip-backprop_ja.assets/image-20230513183909809.png)
+![image-20230513183909809](01ja_report_flip-backprop_ja.assets/image-20230513183909809.png)
 
 - 結果
   - x_flip_raio : 小さくなっていく
@@ -342,9 +396,9 @@
 
 ## FP32レイヤ（第一層）の学習
 
-図．Linearレイヤの学習結果
+**図．Linearレイヤの学習結果**
 
-![image-20230513183953372](01_report_flip-backprop_ja.assets/image-20230513183953372.png)
+![image-20230513183953372](01ja_report_flip-backprop_ja.assets/image-20230513183953372.png)
 
 - 結果
   - fc1.weight/bias : 収束する

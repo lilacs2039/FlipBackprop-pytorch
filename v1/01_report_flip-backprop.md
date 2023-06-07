@@ -2,6 +2,11 @@
 
 # ~ Overhaul neural network learning methods
 
+Change History
+
+- Corrected XNOR Backward calculation procedure in "Figure.BMA Layer Summary". (June 7, 2023)
+- Additions and corrections were made to grad2flip and flip2grad. (June 7, 2023)
+
 
 
 # SUMMARY
@@ -28,45 +33,100 @@
 
 - The value update is represented by a flip, i.e., "to flip (1) or not to flip (0)" in one bit.
 
-Figure. Example of updating by flipping bits
+**Figure. Example of updating by flipping bits**
 
-![image-20230511222334424](01_report_flip-backprop_ja.assets/image-20230511222334424.png)
+![image-20230511222334424](01ja_report_flip-backprop_ja.assets/image-20230511222334424.png)
 
 - Since each weight is represented by only two values, if the update instructions are accurate, they will converge to the optimal value in one step.
   - In actual learning, this does not mean that learning is completed in a single step, since the appropriate update instructions change as the learning of the previous layer progresses.
 
 - On the contrary, continuous-valued gradient updating converges to the optimal value after multiple updates.
 
-Figure . Example of updating continuous values in the gradient direction
+**Figure . Example of updating continuous values in the gradient direction**
 
-![image-20230515152813800](01_report_flip-backprop.assets/image-20230515152813800.png)
+![image-20230515152813800](01ja_report_flip-backprop_ja.assets/image-20230515152813800.png)
 
 - Therefore, it may be possible to complete the training in fewer steps than FP32 weights.
+
 
 
 
 ## Conversion between grad and flip
 
 - Since binary weights are discrete values and cannot be updated by existing gradients, it is necessary to reconsider how to update binary values.
-- Since binary values are binary only, the update signal only tells whether the value is flipped or not (flip).
+- Since binary values are only 0 and 1, the update signal only tells whether the value is flipped or not (flip).
+
+**Figure . Correspondence between "gradient of FP32 weights" and "flip of binary weights"**
+
+![Threshold  "eight  F p 32  Binary  gradient  The gradient is  subtracted trom the  weights ](01ja_report_flip-backprop_ja.assets/clip_image001.png)
+
+- When FP32 weights are binarized with thresholds to obtain binary weights, gradient (grad) and inversions (flip) can be interconverted as follows.
 
 
 
-Figure . Correspondence between "gradient of FP32 weights" and "flip of binary weights
+## grad2flip
 
-![Threshold  "eight  F p 32  Binary  gradient  The gradient is  subtracted trom the  weights ](01_report_flip-backprop_ja.assets/clip_image001.png)
+grad2flip is mainly done during the back propagation of the popcount operation.
 
-- When FP32 weights are binarized with thresholds to obtain binary weights, the gradient (grad) and inversion(flip) conversions are as follows, respectively.
-    - grad to flip
-      - When the FP32 weights are gradient updated in the direction of exceeding the threshold, the corresponding binary weights are also updated in the direction of flipping, so flip is set to 1.
-      - When the FP32 weights are gradient updated in the direction opposite to the threshold, flip is 0.
-    - flip to grad 
-      - The contribution to grad is calculated from "flip" and "the magnitude of the FP32 weights and thresholds for which grad is to be calculated" as follows.
-        - When flip is 0 : 0
-        - When flip is 1 and FP32 weight is greater than the threshold : 1
-        - When flip is 1 and FP32 weight is less than threshold : -1
-      - Sum the contributions to obtain the grad.
-- In the above method, gradient and inversion can be converted to each other.
+**Figure 1. popcount Forward/Backward Conversion**
+
+![image-20230607173057792](01ja_report_flip-backprop_ja.assets/image-20230607173057792.png)
+
+### Concept
+
+（The (usual) continuous-valued gradient descent method updates the weights in the direction of decreasing ERROR.
+
+**Figure . Example of weight update in gradient descent method**
+
+![image-20230607172140800](01ja_report_flip-backprop_ja.assets/image-20230607172140800.png)
+
+
+
+The binary input in the inverse back propagation method is updated in the same direction.
+
+- When grad>0: make the binary value smaller, i.e., set bit to 0
+  - Input x is 0 → no inversion ... A1
+  - Input x is 1 → Invert ... A2
+- When grad<0: Increase the binary value, that is, set the bit to 1.
+  - Input x=0 → Inverted ... B1
+  - Input x is 1 → No inversion ... B2
+- When grad=0: leave the binary value as it is ... C
+
+**Figure . Example of binary weight update in the flip backprop method**
+
+![image-20230607172224076](01ja_report_flip-backprop_ja.assets/image-20230607172224076.png)
+
+Each case is listed in the table below.
+
+**Table . How to find the flip, for gradient and input x**
+
+![image-20230607172626518](01ja_report_flip-backprop_ja.assets/image-20230607172626518.png)
+
+### Calculation Method
+
+The previous table can be expressed by XOR/AND operations as shown in the table below.
+
+**Table. Truth table for finding flip from gradient and input x using bitwise operations**
+
+![image-20230607172644685](01ja_report_flip-backprop_ja.assets/image-20230607172644685.png)
+
+
+
+## flip2grad
+
+flip2grad is mainly used for back propagation of the binarize operation.
+
+**Figure. forward/backward transformation of binarize**
+
+![image-20230607173254719](01ja_report_flip-backprop_ja.assets/image-20230607173254719.png)
+
+### Calculation Method
+
+- The contribution to grad is calculated from "flip" and "the relationship between the FP32 weights and thresholds for which grad is to be calculated" as follows.
+  - When flip is 0 : 0
+  - When flip is 1 and FP32 weight is greater than the threshold : 1
+  - When flip is 1 and FP32 weight is less than threshold : -1
+- Sum the contributions to obtain grad.
 
 
 
@@ -92,7 +152,7 @@ Figure . Correspondence between "gradient of FP32 weights" and "flip of binary w
 
 Figure. Back propagation of gradient and flips while transforming each other
 
-![image-20230512231650025](01_report_flip-backprop_ja.assets/image-20230512231650025.png)
+![image-20230512231650025](01ja_report_flip-backprop_ja.assets/image-20230512231650025.png)
 
 
 
@@ -135,7 +195,7 @@ Figure. Back propagation of gradient and flips while transforming each other
 
 
 Figure. Example of back propagation paths
-![X : bina  XNOR  poocou t  O: FP32  W : binary  Backward ](01_report_flip-backprop_ja.assets/clip_image001-1683902020295-2.png)
+![X : bina  XNOR  poocou t  O: FP32  W : binary  Backward ](01ja_report_flip-backprop_ja.assets/clip_image001-1683902020295-2.png)
 
 
 
@@ -155,7 +215,7 @@ Figure. Example of back propagation paths
 
 Figure. Oscillation of ACCURACY in the late stage of learning
 
-![image-20230512233304848](01_report_flip-backprop_ja.assets/image-20230512233304848.png)
+![image-20230512233304848](01ja_report_flip-backprop_ja.assets/image-20230512233304848.png)
 
 
 
@@ -198,7 +258,7 @@ Figure. Oscillation of ACCURACY in the late stage of learning
 
 Figure. Binarize Layer Summary: Tensor shape and Forward/Backward calculation method
 
-![image-20230513235716781](01_report_flip-backprop_ja.assets/image-20230513235716781.png)
+![image-20230513235716781](01ja_report_flip-backprop_ja.assets/image-20230513235716781.png)
 
 
 
@@ -218,7 +278,7 @@ Figure. Binarize Layer Summary: Tensor shape and Forward/Backward calculation me
 
 Figure. Summary of BMA layer: Tensor shape and Forward/Backward computation method
 
-![image-20230513235702350](01_report_flip-backprop_ja.assets/image-20230513235702350.png)
+![image-20230607102431671](01ja_report_flip-backprop_ja.assets/image-20230607102431671.png)
 
 
 
@@ -263,7 +323,7 @@ Figure. Summary of BMA layer: Tensor shape and Forward/Backward computation meth
 
 Figure. Graph of the model visualized by torchviz. Binary processing is completed within the node indicated by the red box.
 
-![image-20230513161429225](01_report_flip-backprop_ja.assets/image-20230513161429225.png)
+![image-20230513161429225](01ja_report_flip-backprop_ja.assets/image-20230513161429225.png)
 
 
 
@@ -301,7 +361,7 @@ Figure. Graph of the model visualized by torchviz. Binary processing is complete
 
 Figure. learning results of accuracy and loss
 
-![image-20230513183346050](01_report_flip-backprop_ja.assets/image-20230513183346050.png)
+![image-20230513183346050](01ja_report_flip-backprop_ja.assets/image-20230513183346050.png)
 
 - Result: ACCURACY, train_loss, and valid_loss converge
 - Discussion: This is typical behavior when learning converges.
@@ -313,7 +373,7 @@ Figure. learning results of accuracy and loss
 
 Figure. Binary layer learning results
 
-![image-20230513183731049](01_report_flip-backprop_ja.assets/image-20230513183731049.png)
+![image-20230513183731049](01ja_report_flip-backprop_ja.assets/image-20230513183731049.png)
 
 - Result
   - w_flip_ratio : getting smaller and smaller
@@ -332,7 +392,7 @@ Figure. Binary layer learning results
 
 Figure. Distribution of flips and gradients during training
 
-![image-20230513183909809](01_report_flip-backprop_ja.assets/image-20230513183909809.png)
+![image-20230513183909809](01ja_report_flip-backprop_ja.assets/image-20230513183909809.png)
 
 - Result
   - x_flip_raio : getting smaller and smaller
@@ -344,7 +404,7 @@ Figure. Distribution of flips and gradients during training
 
 Figure. Learning results for the linear layer
 
-![image-20230513183953372](01_report_flip-backprop_ja.assets/image-20230513183953372.png)
+![image-20230513183953372](01ja_report_flip-backprop_ja.assets/image-20230513183953372.png)
 
 - Result
   - fc1.weight/bias : Convergence
