@@ -2,9 +2,7 @@
 
 # サマリー
 
-
-
-前レポートでは直列逆伝播による学習を提案したが、重みの優先的な学習が更新信号消失の原因となっていた。そこで、入力層を優先して学習し、２回目のForwardでバイナリ重みを更新するFBF(Forward-Backward-Forward)学習を導入することで、勾配消失を改善することが可能となった。
+前レポートでは直列逆伝播による学習を提案したが、重みの優先的な学習が更新信号消失の原因となっていた。そこで、入力層を優先して学習し、２回目のForwardでバイナリ重みを更新するFBF(Forward-Backward-Forward)学習を導入することで、更新信号消失を改善することが可能となった。
 
 本手法で、重みがすべてバイナリ値であるバイナリニューラルネットワーク（Full binary NN）を反転逆伝播法で直接バイナリ学習することにより、irisデータセットで90%程度の精度を達成した。
 
@@ -62,31 +60,72 @@ update suppressorはFP32学習の学習率に相当し、学習速度と収束�
 
 
 
-# 関数・モジュール一覧
+# 関数・モジュール
 
-下表に、本手法で利用する関数やモジュールの入出力テンソルの型、逆伝搬信号の形式、入出力テンソルの軸を示した。
+モデルの構成部品は、関数・モジュールとそれらを組み合わせたモジュールである。
 
-**表．本手法で利用する関数・モジュールの一覧**
+**図．関数・モジュールの組み合わせ**
 
-| **Functions/Modules**                                        | **dtype of in/out**<br />※１                 | **Format of Backward signal**  | **Shape**s                                                   |
-| ------------------------------------------------------------ | -------------------------------------------- | ------------------------------ | ------------------------------------------------------------ |
-| **popcount**                                                 | uint8  <-> fp32                              | flip <- grad　❗                | bdoi  -> bo<br />bdoi  <- bo                                 |
-| **binarize**                                                 | fp32  <-> uint8                              | grad <- flip　❗                | bx ->  bdx<br />bx <-  bdx                                   |
-| **PNB**  <br />**popcount_normalize<br />    _binarize**<br />**popcount_binarize** | uint8  <-> uint8                             | flip  <- flip                  | bdoi  -> bdo<br />bdoi  <- bdo                               |
-| **xnor**                                                     | uint8  <-> uint8                             | flip <- flip                   | … ->  …<br />  … <-  …                                       |
-| **BinaryTensor**                                             | (None)  <-> uint8                            | flip  <- flip                  | (None)  -> oi<br />(None)  <- oi                             |
-| **XnorWeight**                                               | uint8  <-> uint8                             | flip <- flip                   | x:bdi,  w:doi -> bdoi<br />x : bdi <- bdoi<br />w : doi <- bdoi |
-| **BMA**                                                      | uint8  <-> fp32                              | flip <- grad ❗                 | bdi  -> bo<br />bdi  <- bo                                   |
-| **BMAB**                                                     | uint8  <-> uint8                             | flip  <- flip                  | bdi  -> bdo<br />bdi  <- bdo                                 |
-| **Notes**                                                    | ※１  <br />-> :  Forward<br /><- :  Backward | ❗Needs flip/grad    conversion |                                                              |
+![Pieces&Combination of Functions/ Modules @v2  Combined Pisces  XnorW±iEht ](01ja_report_full-binary-NN_ja.assets/clip_image001-1686046927982-4.png)
+
+## 一覧
+
+下表に、関数・モジュールの入出力テンソルの型、逆伝搬信号の形式、入出力テンソルの軸を示した。
+
+**表．本手法で利用する関数・モジュールの一覧**　※１
+
+| **Functions/Modules**                                        | **dtype of in/out** | **Format of <br />Backward signal** ※２ | **Axes of tensors**                                          |
+| ------------------------------------------------------------ | ------------------- | --------------------------------------- | ------------------------------------------------------------ |
+| **popcount**                                                 | uint8  <-> fp32     | flip <- grad　❗                         | bdoi  -> bo<br />bdoi  <- bo                                 |
+| **binarize**                                                 | fp32  <-> uint8     | grad <- flip　❗                         | bx ->  bdx<br />bx <-  bdx                                   |
+| **PNB**  <br />**popcount_normalize<br />    _binarize**<br />**popcount_binarize** | uint8  <-> uint8    | flip  <- flip                           | bdoi  -> bdo<br />bdoi  <- bdo                               |
+| **xnor**                                                     | uint8  <-> uint8    | flip <- flip                            | … ->  …<br />… <-  …                                         |
+| **BinaryTensor**                                             | (None)  <-> uint8   | flip  <- flip                           | (None)  -> oi<br />(None)  <- oi                             |
+| **XnorWeight**                                               | uint8  <-> uint8    | flip <- flip                            | x:bdi,  w:doi -> bdoi<br />x : bdi <- bdoi<br />w : doi <- bdoi |
+| **BMA**                                                      | uint8  <-> fp32     | flip <- grad ❗                          | bdi  -> bo<br />bdi  <- bo                                   |
+| **BMAB**                                                     | uint8  <-> uint8    | flip  <- flip                           | bdi  -> bdo<br />bdi  <- bdo                                 |
+
+※１
+- -> :  Forward
+- <- :  Backward
+
+※２：❗Needs flip/grad    conversion
 
 ※BitBalanceはもはや使用していない。ビットの集計はたいてい標準化が必要だが、popcountの二項分布の方が平均「pN」・標準偏差「√Np(1-p)」の計算が簡単なため。
 
 
 
-**図．関数・モジュールの組み合わせ**
+Axes of tensorsの各シンボルの次元の数は下表のようになる。
 
-![Pieces&Combination of Functions/ Modules @v2  Combined Pisces  XnorW±iEht ](01ja_report_full-binary-NN_ja.assets/clip_image001-1686046927982-4.png)
+| **Symbol** | Meaning         | **Number of dimensions**                              |
+| ---------- | --------------- | ----------------------------------------------------- |
+| b          | batch           | バッチサイズ                                          |
+| d          | depth           | バイナリ化するときのしきい値の数                      |
+| x          | (input  tensor) | 各サンプルの特徴量の数                                |
+| o          | output          | 特徴量数の変わるレイヤ（BMA、BMABなど）の出力特徴量数 |
+| i          | input           | 特徴量数の変わるレイヤ（BMA、BMABなど）の入力特徴量数 |
+
+
+
+## PNB (popcount_normalize_binarize)
+
+３つの演算「popcount, normalize, binarize」を結合した関数と、それに対応するモジュールを用意した。
+
+popcount・binarize関数は逆伝播時にそれぞれgrad2flip・flip2gradが必要である。gradの標準化のためのfloat演算が必要であり、バイナリ学習の高速・省メモリな特徴を損なってしまう。
+
+そこで、これらの関数を結合した関数・モジュールを用意した。逆伝播テンソルの形式はflip2flipとなり、途中のgradの標準化を省くことで計算量が減るメリットがある。
+
+**図．PNBの処理の流れ**
+
+![image-20230607112922846](01ja_report_full-binary-NN_ja.assets/image-20230607112922846.png)
+
+
+
+## BMAB (Binary Multiply-Accumulate Binarize)
+
+２つのモジュール「BMA, Binarize」を結合したモジュールである。
+
+PNBと同様に、途中のgradの標準化処理を省くことで計算量が減るメリットがある。
 
 
 
@@ -146,6 +185,8 @@ BMABとBMAは線形レイヤのような働きをするので、２層の線形�
 
 # 実験の結果・考察
 
+実験結果：[[v2 : Full binary NN] Experimental results](https://api.wandb.ai/links/lilacs2039/jdka9d9s)
+
 ## 学習の収束性
 
 **図．学習時のaccuracy, lossの変動**
@@ -159,7 +200,7 @@ BMABとBMAは線形レイヤのような働きをするので、２層の線形�
 
 考察
 
-- 学習が収束する時に典型的な振る舞い。
+- 学習が収束する時に典型的な振る舞いである。
 
    
 
@@ -175,7 +216,7 @@ BMABとBMAは線形レイヤのような働きをするので、２層の線形�
 
 分かったこと
 
-- 勾配消失による未学習は起きていない。
+- 更新信号消失による未学習は起きていない。
 - 適切な学習が行われていること
 
  
